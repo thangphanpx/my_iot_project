@@ -4,7 +4,6 @@ import '../providers/iot_provider.dart';
 import '../widgets/sensor_card.dart';
 import '../widgets/chart_widget.dart';
 import '../models/sensor_data.dart';
-import '../models/device.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
