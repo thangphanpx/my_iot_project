@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
-import 'package:provider/provider.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/sensor_data.dart';
-import '../providers/iot_provider.dart';
+import '../providers/iot_providers.dart';
 import '../config/app_config.dart';
 
-class ChartWidget extends StatefulWidget {
+class ChartWidget extends ConsumerStatefulWidget {
   final String deviceId;
   final SensorType sensorType;
   final String title;
@@ -20,89 +20,83 @@ class ChartWidget extends StatefulWidget {
   });
 
   @override
-  State<ChartWidget> createState() => _ChartWidgetState();
+  ConsumerState<ChartWidget> createState() => _ChartWidgetState();
 }
 
-class _ChartWidgetState extends State<ChartWidget> {
+class _ChartWidgetState extends ConsumerState<ChartWidget> {
   List<FlSpot> _chartData = [];
   double _minY = 0;
   double _maxY = 100;
 
   @override
   Widget build(BuildContext context) {
-    return Consumer<IoTProvider>(
-      builder: (context, iotProvider, child) {
-        final sensorData = iotProvider
-            .getSensorDataForDevice(
-              widget.deviceId,
-              limit: AppConfig.maxDataPoints,
-            )
-            .where((data) => data.type == widget.sensorType)
-            .toList();
+    final sensorDataForDevice =
+        ref.watch(deviceSensorDataForDeviceProvider(widget.deviceId));
+    final sensorData = sensorDataForDevice
+        .where((data) => data.type == widget.sensorType)
+        .toList();
 
-        _updateChartData(sensorData);
+    _updateChartData(sensorData);
 
-        return Container(
-          height: widget.height,
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: Theme.of(context).cardColor,
-            borderRadius: BorderRadius.circular(AppConfig.borderRadius),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.1),
-                blurRadius: 8,
-                offset: const Offset(0, 2),
-              ),
-            ],
+    return Container(
+      height: widget.height,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Theme.of(context).cardColor,
+        borderRadius: BorderRadius.circular(AppConfig.borderRadius),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.1),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
           ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Title
+          Row(
             children: [
-              // Title
-              Row(
-                children: [
-                  Text(
-                    widget.sensorType.icon,
-                    style: const TextStyle(fontSize: 20),
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    widget.title,
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.bold,
-                        ),
-                  ),
-                  const Spacer(),
-                  Text(
-                    '${sensorData.length} points',
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: Colors.grey[600],
-                        ),
-                  ),
-                ],
+              Text(
+                widget.sensorType.icon,
+                style: const TextStyle(fontSize: 20),
               ),
-              const SizedBox(height: 16),
-
-              // Chart
-              Expanded(
-                child: sensorData.isEmpty
-                    ? _buildEmptyState()
-                    : LineChart(
-                        _buildChartData(sensorData),
-                        duration: const Duration(milliseconds: 250),
-                      ),
+              const SizedBox(width: 8),
+              Text(
+                widget.title,
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
               ),
-
-              // Statistics Row
-              if (sensorData.isNotEmpty) ...[
-                const SizedBox(height: 8),
-                _buildStatisticsRow(sensorData),
-              ],
+              const Spacer(),
+              Text(
+                '${sensorData.length} points',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Colors.grey[600],
+                    ),
+              ),
             ],
           ),
-        );
-      },
+          const SizedBox(height: 16),
+
+          // Chart
+          Expanded(
+            child: sensorData.isEmpty
+                ? _buildEmptyState()
+                : LineChart(
+                    _buildChartData(sensorData),
+                    duration: const Duration(milliseconds: 250),
+                  ),
+          ),
+
+          // Statistics Row
+          if (sensorData.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            _buildStatisticsRow(sensorData),
+          ],
+        ],
+      ),
     );
   }
 

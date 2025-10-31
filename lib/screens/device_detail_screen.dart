@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
-import '../providers/iot_provider.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../providers/iot_providers.dart';
 import '../widgets/chart_widget.dart';
 import '../models/device.dart';
 import '../models/sensor_data.dart';
 
-class DeviceDetailScreen extends StatefulWidget {
+class DeviceDetailScreen extends ConsumerStatefulWidget {
   final String deviceId;
 
   const DeviceDetailScreen({
@@ -14,20 +14,39 @@ class DeviceDetailScreen extends StatefulWidget {
   });
 
   @override
-  State<DeviceDetailScreen> createState() => _DeviceDetailScreenState();
+  ConsumerState<DeviceDetailScreen> createState() => _DeviceDetailScreenState();
 }
 
-class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
+class _DeviceDetailScreenState extends ConsumerState<DeviceDetailScreen> {
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<IoTProvider>().refreshDevices();
+      final refreshDevices = ref.read(refreshDevicesProvider);
+      refreshDevices?.call();
     });
   }
 
   @override
   Widget build(BuildContext context) {
+    final devices = ref.watch(devicesProvider);
+    final sensorDataForDevice =
+        ref.watch(deviceSensorDataForDeviceProvider(widget.deviceId));
+
+    final device = devices.firstWhere(
+      (d) => d.id == widget.deviceId,
+      orElse: () => Device(
+        id: widget.deviceId,
+        name: 'Unknown Device',
+        location: 'Unknown Location',
+        type: DeviceType.sensor,
+        status: DeviceStatus.offline,
+        lastSeen: DateTime.now(),
+        ipAddress: '0.0.0.0',
+        macAddress: '00:00:00:00:00:00',
+      ),
+    );
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Device Details'),
@@ -42,46 +61,28 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
           ),
         ],
       ),
-      body: Consumer<IoTProvider>(
-        builder: (context, iotProvider, child) {
-          final device = iotProvider.devices.firstWhere(
-            (d) => d.id == widget.deviceId,
-            orElse: () => Device(
-              id: widget.deviceId,
-              name: 'Unknown Device',
-              location: 'Unknown Location',
-              type: DeviceType.sensor,
-              status: DeviceStatus.offline,
-              lastSeen: DateTime.now(),
-              ipAddress: '0.0.0.0',
-              macAddress: '00:00:00:00:00:00',
-            ),
-          );
+      body: SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Device Header Card
+            _buildDeviceHeader(device),
 
-          return SingleChildScrollView(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Device Header Card
-                _buildDeviceHeader(device),
+            // Device Information
+            _buildDeviceInfo(device),
 
-                // Device Information
-                _buildDeviceInfo(device),
+            // Control Panel
+            _buildControlPanel(device),
 
-                // Control Panel
-                _buildControlPanel(device),
+            // Charts Section
+            _buildChartsSection(device),
 
-                // Charts Section
-                _buildChartsSection(device),
+            // Recent Activity
+            _buildRecentActivity(device, sensorDataForDevice),
 
-                // Recent Activity
-                _buildRecentActivity(device),
-
-                const SizedBox(height: 16),
-              ],
-            ),
-          );
-        },
+            const SizedBox(height: 16),
+          ],
+        ),
       ),
     );
   }
@@ -297,6 +298,8 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
   }
 
   Widget _buildControlPanel(Device device) {
+    final controlDevice = ref.read(controlDeviceProvider);
+
     return Container(
       padding: const EdgeInsets.all(16),
       child: Column(
@@ -387,7 +390,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
     );
   }
 
-  Widget _buildRecentActivity(Device device) {
+  Widget _buildRecentActivity(Device device, List<SensorData> sensorData) {
     return Container(
       padding: const EdgeInsets.all(16),
       child: Column(
@@ -400,25 +403,17 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                 ),
           ),
           const SizedBox(height: 16),
-          Consumer<IoTProvider>(
-            builder: (context, iotProvider, child) {
-              final sensorData = iotProvider.getSensorDataForDevice(
-                device.id,
-                limit: 10,
-              );
-
-              if (sensorData.isEmpty) {
-                return const Center(
-                  child: Text('No recent activity'),
-                );
-              }
-
-              return Column(
-                children:
-                    sensorData.map((data) => _buildActivityItem(data)).toList(),
-              );
-            },
-          ),
+          if (sensorData.isEmpty)
+            const Center(
+              child: Text('No recent activity'),
+            )
+          else
+            Column(
+              children: sensorData
+                  .take(10)
+                  .map((data) => _buildActivityItem(data))
+                  .toList(),
+            ),
         ],
       ),
     );
@@ -475,8 +470,8 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
   }
 
   void _controlDevice(String action) {
-    final iotProvider = context.read<IoTProvider>();
-    iotProvider.controlDevice(widget.deviceId, {'action': action});
+    final controlDevice = ref.read(controlDeviceProvider);
+    controlDevice?.call(widget.deviceId, {'action': action});
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('Sent $action command to device')),
@@ -491,6 +486,8 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
   }
 
   void _showDeleteDeviceDialog() {
+    final deleteDevice = ref.read(deleteDeviceProvider);
+
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -504,7 +501,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
           ),
           TextButton(
             onPressed: () {
-              context.read<IoTProvider>().deleteDevice(widget.deviceId);
+              deleteDevice?.call(widget.deviceId);
               Navigator.pop(context);
               Navigator.pop(context);
               ScaffoldMessenger.of(context).showSnackBar(

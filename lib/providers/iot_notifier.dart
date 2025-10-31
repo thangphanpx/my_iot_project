@@ -1,50 +1,24 @@
 import 'dart:async';
 import 'dart:convert';
-import 'package:flutter/foundation.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/device.dart';
 import '../models/sensor_data.dart';
 import '../services/mqtt_service.dart';
 import '../services/api_service.dart';
 import '../config/app_config.dart';
+import 'iot_state.dart';
 
-class IoTProvider extends ChangeNotifier {
+class IoTNotifier extends StateNotifier<IoTState> {
+  IoTNotifier() : super(const IoTState()) {
+    _initialize();
+  }
+
   final MQTTService _mqttService = MQTTService();
   final ApiService _apiService = ApiService();
 
-  // State
-  List<Device> _devices = [];
-  List<SensorData> _sensorData = [];
-  Map<String, List<SensorData>> _deviceSensorData = {};
-  bool _isLoading = false;
-  String _connectionStatus = 'Disconnected';
   Timer? _dataRefreshTimer;
   Timer? _chartUpdateTimer;
-
-  // Getters
-  List<Device> get devices => _devices;
-  List<SensorData> get sensorData => _sensorData;
-  bool get isLoading => _isLoading;
-  String get connectionStatus => _connectionStatus;
-
-  SensorData? getLatestSensorData(String deviceId) {
-    final deviceData = _deviceSensorData[deviceId];
-    return deviceData?.isNotEmpty == true ? deviceData!.last : null;
-  }
-
-  List<Device> get onlineDevices =>
-      _devices.where((device) => device.isOnline).toList();
-  List<Device> get offlineDevices =>
-      _devices.where((device) => !device.isOnline).toList();
-
-  // Computed properties
-  int get totalDevices => _devices.length;
-  int get activeDevices => onlineDevices.length;
-  double get systemUptime => _calculateSystemUptime();
-
-  IoTProvider() {
-    _initialize();
-  }
 
   Future<void> _initialize() async {
     await _loadCachedData();
@@ -59,7 +33,7 @@ class IoTProvider extends ChangeNotifier {
       final cachedDevices = prefs.getStringList(AppConfig.devicesStorageKey);
 
       if (cachedDevices != null) {
-        _devices = cachedDevices
+        final devices = cachedDevices
             .map((jsonString) {
               try {
                 final Map<String, dynamic> jsonData = json.decode(jsonString);
@@ -72,7 +46,8 @@ class IoTProvider extends ChangeNotifier {
             .where((device) => device != null)
             .cast<Device>()
             .toList();
-        notifyListeners();
+
+        state = state.copyWith(devices: devices);
       }
     } catch (e) {
       print('Error loading cached data: $e');
@@ -93,28 +68,25 @@ class IoTProvider extends ChangeNotifier {
       });
 
       _mqttService.connectionStatusStream.listen((status) {
-        _connectionStatus = status;
-        notifyListeners();
+        state = state.copyWith(connectionStatus: status);
       });
     } catch (e) {
       print('Error initializing MQTT: $e');
-      _connectionStatus = 'MQTT initialization failed';
-      notifyListeners();
+      state = state.copyWith(connectionStatus: 'MQTT initialization failed');
     }
   }
 
   Future<void> _loadDevicesFromAPI() async {
-    _setLoading(true);
+    state = state.copyWith(isLoading: true);
     try {
-      _devices = await _apiService.getDevices();
+      final devices = await _apiService.getDevices();
+      state = state.copyWith(devices: devices);
       await _cacheDevices();
-      notifyListeners();
     } catch (e) {
       print('Error loading devices from API: $e');
-      _connectionStatus = 'Failed to load devices';
-      notifyListeners();
+      state = state.copyWith(connectionStatus: 'Failed to load devices');
     } finally {
-      _setLoading(false);
+      state = state.copyWith(isLoading: false);
     }
   }
 
@@ -122,7 +94,7 @@ class IoTProvider extends ChangeNotifier {
     try {
       final prefs = await SharedPreferences.getInstance();
       final deviceJsons =
-          _devices.map((device) => device.toJson().toString()).toList();
+          state.devices.map((device) => device.toJson().toString()).toList();
       await prefs.setStringList(AppConfig.devicesStorageKey, deviceJsons);
     } catch (e) {
       print('Error caching devices: $e');
@@ -131,48 +103,58 @@ class IoTProvider extends ChangeNotifier {
 
   void _handleNewSensorData(SensorData sensorData) {
     // Add to general sensor data list
-    _sensorData.add(sensorData);
+    final updatedSensorData = [...state.sensorData, sensorData];
 
     // Keep only recent data points
-    if (_sensorData.length > AppConfig.maxDataPoints) {
-      _sensorData.removeRange(0, _sensorData.length - AppConfig.maxDataPoints);
-    }
+    final recentSensorData = updatedSensorData.length > AppConfig.maxDataPoints
+        ? updatedSensorData
+            .sublist(updatedSensorData.length - AppConfig.maxDataPoints)
+        : updatedSensorData;
 
     // Add to device-specific data
-    if (_deviceSensorData[sensorData.deviceId] == null) {
-      _deviceSensorData[sensorData.deviceId] = [];
+    final updatedDeviceSensorData =
+        Map<String, List<SensorData>>.from(state.deviceSensorData);
+
+    if (updatedDeviceSensorData[sensorData.deviceId] == null) {
+      updatedDeviceSensorData[sensorData.deviceId] = [];
     }
 
-    _deviceSensorData[sensorData.deviceId]!.add(sensorData);
+    final deviceData = [
+      ...updatedDeviceSensorData[sensorData.deviceId]!,
+      sensorData
+    ];
 
     // Keep only recent data points per device
-    if (_deviceSensorData[sensorData.deviceId]!.length >
-        AppConfig.maxDataPoints) {
-      _deviceSensorData[sensorData.deviceId]!.removeRange(
-          0,
-          _deviceSensorData[sensorData.deviceId]!.length -
-              AppConfig.maxDataPoints);
-    }
+    final recentDeviceData = deviceData.length > AppConfig.maxDataPoints
+        ? deviceData.sublist(deviceData.length - AppConfig.maxDataPoints)
+        : deviceData;
+
+    updatedDeviceSensorData[sensorData.deviceId] = recentDeviceData;
+
+    // Update state
+    state = state.copyWith(
+      sensorData: recentSensorData,
+      deviceSensorData: updatedDeviceSensorData,
+    );
 
     // Send to API
     _apiService.sendSensorData(sensorData).catchError((e) {
       print('Error sending sensor data to API: $e');
     });
-
-    notifyListeners();
   }
 
   void _handleDeviceStatusUpdate(Device updatedDevice) {
-    final index =
-        _devices.indexWhere((device) => device.id == updatedDevice.id);
+    final devices = [...state.devices];
+    final index = devices.indexWhere((device) => device.id == updatedDevice.id);
+
     if (index != -1) {
-      _devices[index] = updatedDevice;
+      devices[index] = updatedDevice;
     } else {
-      _devices.add(updatedDevice);
+      devices.add(updatedDevice);
     }
 
+    state = state.copyWith(devices: devices);
     _cacheDevices();
-    notifyListeners();
   }
 
   void _startPeriodicUpdates() {
@@ -185,7 +167,8 @@ class IoTProvider extends ChangeNotifier {
 
     // Update charts every minute
     _chartUpdateTimer = Timer.periodic(AppConfig.chartUpdateInterval, (timer) {
-      notifyListeners(); // Trigger chart updates
+      // Trigger chart updates by copying state (no changes needed)
+      state = state.copyWith();
     });
   }
 
@@ -194,52 +177,60 @@ class IoTProvider extends ChangeNotifier {
   }
 
   Future<void> addDevice(Device device) async {
+    state = state.copyWith(isLoading: true);
     try {
-      _setLoading(true);
       final newDevice = await _apiService.createDevice(device);
-      _devices.add(newDevice);
+      final devices = [...state.devices, newDevice];
+      state = state.copyWith(devices: devices);
       await _cacheDevices();
-      notifyListeners();
     } catch (e) {
       print('Error adding device: $e');
-      throw e;
+      rethrow;
     } finally {
-      _setLoading(false);
+      state = state.copyWith(isLoading: false);
     }
   }
 
   Future<void> updateDevice(String deviceId, Device device) async {
+    state = state.copyWith(isLoading: true);
     try {
-      _setLoading(true);
       final updatedDevice = await _apiService.updateDevice(deviceId, device);
 
-      final index = _devices.indexWhere((d) => d.id == deviceId);
+      final devices = [...state.devices];
+      final index = devices.indexWhere((d) => d.id == deviceId);
       if (index != -1) {
-        _devices[index] = updatedDevice;
+        devices[index] = updatedDevice;
+        state = state.copyWith(devices: devices);
         await _cacheDevices();
-        notifyListeners();
       }
     } catch (e) {
       print('Error updating device: $e');
-      throw e;
+      rethrow;
     } finally {
-      _setLoading(false);
+      state = state.copyWith(isLoading: false);
     }
   }
 
   Future<void> deleteDevice(String deviceId) async {
+    state = state.copyWith(isLoading: true);
     try {
-      _setLoading(true);
       await _apiService.deleteDevice(deviceId);
-      _devices.removeWhere((device) => device.id == deviceId);
-      _deviceSensorData.remove(deviceId);
+      final devices =
+          state.devices.where((device) => device.id != deviceId).toList();
+      final deviceSensorData =
+          Map<String, List<SensorData>>.from(state.deviceSensorData);
+      deviceSensorData.remove(deviceId);
+
+      state = state.copyWith(
+        devices: devices,
+        deviceSensorData: deviceSensorData,
+      );
       await _cacheDevices();
-      notifyListeners();
     } catch (e) {
       print('Error deleting device: $e');
-      throw e;
+      rethrow;
     } finally {
-      _setLoading(false);
+      state = state.copyWith(isLoading: false);
     }
   }
 
@@ -251,64 +242,8 @@ class IoTProvider extends ChangeNotifier {
       await refreshDevices();
     } catch (e) {
       print('Error controlling device: $e');
-      throw e;
+      rethrow;
     }
-  }
-
-  List<SensorData> getSensorDataForDevice(String deviceId, {int? limit}) {
-    final deviceData = _deviceSensorData[deviceId];
-    if (deviceData == null) return [];
-
-    final data = deviceData;
-    if (limit != null && data.length > limit) {
-      return data.sublist(data.length - limit);
-    }
-    return data;
-  }
-
-  Map<String, dynamic> getDeviceStats(String deviceId) {
-    final deviceData = _deviceSensorData[deviceId];
-    if (deviceData == null || deviceData.isEmpty) {
-      return {'count': 0, 'latest': null};
-    }
-
-    return {
-      'count': deviceData.length,
-      'latest': deviceData.last,
-      'average': _calculateAverage(deviceData),
-      'min': _findMin(deviceData),
-      'max': _findMax(deviceData),
-    };
-  }
-
-  double _calculateAverage(List<SensorData> data) {
-    if (data.isEmpty) return 0.0;
-    final sum = data.map((d) => d.value).reduce((a, b) => a + b);
-    return sum / data.length;
-  }
-
-  SensorData? _findMin(List<SensorData> data) {
-    if (data.isEmpty) return null;
-    return data.reduce((a, b) => a.value < b.value ? a : b);
-  }
-
-  SensorData? _findMax(List<SensorData> data) {
-    if (data.isEmpty) return null;
-    return data.reduce((a, b) => a.value > b.value ? a : b);
-  }
-
-  double _calculateSystemUptime() {
-    if (_devices.isEmpty) return 0.0;
-
-    final totalDevices = _devices.length;
-    final onlineDevices = _devices.where((device) => device.isOnline).length;
-
-    return (onlineDevices / totalDevices) * 100;
-  }
-
-  void _setLoading(bool loading) {
-    _isLoading = loading;
-    notifyListeners();
   }
 
   Future<void> reconnectMQTT() async {
@@ -316,7 +251,7 @@ class IoTProvider extends ChangeNotifier {
       await _mqttService.initialize();
     } catch (e) {
       print('Error reconnecting MQTT: $e');
-      throw e;
+      rethrow;
     }
   }
 

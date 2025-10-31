@@ -1,37 +1,46 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
-import '../providers/iot_provider.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../providers/iot_providers.dart';
 import '../widgets/sensor_card.dart';
 import '../widgets/chart_widget.dart';
 import '../models/sensor_data.dart';
 
-class DashboardScreen extends StatefulWidget {
+class DashboardScreen extends ConsumerStatefulWidget {
   const DashboardScreen({super.key});
 
   @override
-  State<DashboardScreen> createState() => _DashboardScreenState();
+  ConsumerState<DashboardScreen> createState() => _DashboardScreenState();
 }
 
-class _DashboardScreenState extends State<DashboardScreen> {
+class _DashboardScreenState extends ConsumerState<DashboardScreen> {
   @override
   void initState() {
     super.initState();
     // Refresh data when screen is loaded
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<IoTProvider>().refreshDevices();
+      final refreshDevices = ref.read(refreshDevicesProvider);
+      refreshDevices?.call();
     });
   }
 
   @override
   Widget build(BuildContext context) {
+    final isLoading = ref.watch(isLoadingProvider);
+    final devices = ref.watch(devicesProvider);
+    final connectionStatus = ref.watch(connectionStatusProvider);
+    final totalDevices = ref.watch(totalDevicesProvider);
+    final activeDevices = ref.watch(activeDevicesProvider);
+    final systemUptime = ref.watch(systemUptimeProvider);
+    final refreshDevices = ref.read(refreshDevicesProvider);
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('IoT Dashboard'),
         actions: [
-          _buildConnectionStatus(),
+          _buildConnectionStatus(connectionStatus),
           IconButton(
             icon: const Icon(Icons.refresh),
-            onPressed: () => context.read<IoTProvider>().refreshDevices(),
+            onPressed: () => refreshDevices?.call(),
           ),
           IconButton(
             icon: const Icon(Icons.settings),
@@ -39,39 +48,33 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
         ],
       ),
-      body: Consumer<IoTProvider>(
-        builder: (context, iotProvider, child) {
-          if (iotProvider.isLoading && iotProvider.devices.isEmpty) {
-            return _buildLoadingView();
-          }
+      body: isLoading && devices.isEmpty
+          ? _buildLoadingView()
+          : RefreshIndicator(
+              onRefresh: () async => refreshDevices?.call(),
+              child: SingleChildScrollView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // System Overview Cards
+                    _buildSystemOverview(),
 
-          return RefreshIndicator(
-            onRefresh: () => iotProvider.refreshDevices(),
-            child: SingleChildScrollView(
-              physics: const AlwaysScrollableScrollPhysics(),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // System Overview Cards
-                  _buildSystemOverview(iotProvider),
+                    const SizedBox(height: 16),
 
-                  const SizedBox(height: 16),
+                    // Devices Section
+                    _buildDevicesSection(),
 
-                  // Devices Section
-                  _buildDevicesSection(iotProvider),
+                    const SizedBox(height: 16),
 
-                  const SizedBox(height: 16),
+                    // Charts Section
+                    _buildChartsSection(),
 
-                  // Charts Section
-                  _buildChartsSection(iotProvider),
-
-                  const SizedBox(height: 16),
-                ],
+                    const SizedBox(height: 16),
+                  ],
+                ),
               ),
             ),
-          );
-        },
-      ),
       floatingActionButton: FloatingActionButton(
         onPressed: () => _showAddDeviceDialog(),
         tooltip: 'Add Device',
@@ -80,20 +83,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Widget _buildConnectionStatus() {
-    return Consumer<IoTProvider>(
-      builder: (context, iotProvider, child) {
-        final isConnected =
-            iotProvider.connectionStatus == 'Connected to MQTT broker';
+  Widget _buildConnectionStatus(String connectionStatus) {
+    final isConnected = connectionStatus == 'Connected to MQTT broker';
 
-        return Container(
-          margin: const EdgeInsets.only(right: 8),
-          child: Icon(
-            isConnected ? Icons.wifi : Icons.wifi_off,
-            color: isConnected ? Colors.green : Colors.red,
-          ),
-        );
-      },
+    return Container(
+      margin: const EdgeInsets.only(right: 8),
+      child: Icon(
+        isConnected ? Icons.wifi : Icons.wifi_off,
+        color: isConnected ? Colors.green : Colors.red,
+      ),
     );
   }
 
@@ -110,7 +108,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Widget _buildSystemOverview(IoTProvider iotProvider) {
+  Widget _buildSystemOverview() {
+    final totalDevices = ref.watch(totalDevicesProvider);
+    final activeDevices = ref.watch(activeDevicesProvider);
+    final systemUptime = ref.watch(systemUptimeProvider);
+    final connectionStatus = ref.watch(connectionStatusProvider);
+
     return Container(
       padding: const EdgeInsets.all(16),
       child: Column(
@@ -128,7 +131,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               Expanded(
                 child: _buildOverviewCard(
                   'Total Devices',
-                  iotProvider.totalDevices.toString(),
+                  totalDevices.toString(),
                   Icons.devices,
                   Colors.blue,
                 ),
@@ -137,7 +140,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               Expanded(
                 child: _buildOverviewCard(
                   'Online',
-                  iotProvider.activeDevices.toString(),
+                  activeDevices.toString(),
                   Icons.wifi,
                   Colors.green,
                 ),
@@ -146,8 +149,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               Expanded(
                 child: _buildOverviewCard(
                   'Offline',
-                  (iotProvider.totalDevices - iotProvider.activeDevices)
-                      .toString(),
+                  (totalDevices - activeDevices).toString(),
                   Icons.wifi_off,
                   Colors.grey,
                 ),
@@ -160,7 +162,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               Expanded(
                 child: _buildOverviewCard(
                   'System Uptime',
-                  '${iotProvider.systemUptime.toStringAsFixed(1)}%',
+                  '${systemUptime.toStringAsFixed(1)}%',
                   Icons.trending_up,
                   Colors.orange,
                 ),
@@ -169,11 +171,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
               Expanded(
                 child: _buildOverviewCard(
                   'Connection',
-                  iotProvider.connectionStatus.contains('Connected')
-                      ? 'Online'
-                      : 'Offline',
+                  connectionStatus.contains('Connected') ? 'Online' : 'Offline',
                   Icons.network_check,
-                  iotProvider.connectionStatus.contains('Connected')
+                  connectionStatus.contains('Connected')
                       ? Colors.green
                       : Colors.red,
                 ),
@@ -219,7 +219,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Widget _buildDevicesSection(IoTProvider iotProvider) {
+  Widget _buildDevicesSection() {
+    final devices = ref.watch(devicesProvider);
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Column(
@@ -241,12 +243,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ],
           ),
           const SizedBox(height: 8),
-          if (iotProvider.devices.isEmpty)
+          if (devices.isEmpty)
             _buildEmptyDevicesView()
           else
-            ...iotProvider.devices
-                .take(3)
-                .map((device) => SensorCard(deviceId: device.id)),
+            ...devices.take(3).map((device) => SensorCard(deviceId: device.id)),
         ],
       ),
     );
@@ -283,8 +283,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Widget _buildChartsSection(IoTProvider iotProvider) {
-    if (iotProvider.devices.isEmpty) return const SizedBox.shrink();
+  Widget _buildChartsSection() {
+    final devices = ref.watch(devicesProvider);
+    if (devices.isEmpty) return const SizedBox.shrink();
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -298,7 +299,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 ),
           ),
           const SizedBox(height: 16),
-          ...iotProvider.devices.take(2).expand((device) => [
+          ...devices.take(2).expand((device) => [
                 ChartWidget(
                   deviceId: device.id,
                   sensorType: SensorType.temperature,
@@ -312,6 +313,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   void _showSettingsDialog() {
+    final connectionStatus = ref.read(connectionStatusProvider);
+    final refreshDevices = ref.read(refreshDevicesProvider);
+    final reconnectMQTT = ref.read(reconnectMQTTProvider);
+
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -322,17 +327,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ListTile(
               leading: const Icon(Icons.network_check),
               title: const Text('Connection Status'),
-              subtitle: Consumer<IoTProvider>(
-                builder: (context, provider, child) =>
-                    Text(provider.connectionStatus),
-              ),
+              subtitle: Text(connectionStatus),
             ),
             ListTile(
               leading: const Icon(Icons.refresh),
               title: const Text('Refresh Data'),
               onTap: () {
                 Navigator.pop(context);
-                context.read<IoTProvider>().refreshDevices();
+                refreshDevices?.call();
               },
             ),
             ListTile(
@@ -340,7 +342,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               title: const Text('Reconnect MQTT'),
               onTap: () {
                 Navigator.pop(context);
-                context.read<IoTProvider>().reconnectMQTT();
+                reconnectMQTT?.call();
               },
             ),
           ],
